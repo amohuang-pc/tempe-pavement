@@ -82,26 +82,43 @@ def save(name: str, features: list, has_geometry: bool) -> None:
 
 
 if __name__ == "__main__":
+    failed = []
     for name, (url, geom) in LAYERS.items():
         print(f"\n{name}")
-        feats = fetch_all(url, geom)
+        try:
+            feats = fetch_all(url, geom)
+        except Exception as exc:
+            # Some City servers reject geojson output; retry once as plain json.
+            print(f"  first attempt failed ({exc}); retrying without geojson")
+            try:
+                feats = fetch_all(url, False)
+                geom = False
+            except Exception as exc2:
+                print(f"  SKIPPED: {exc2}")
+                failed.append(name)
+                continue
         save(name, feats, geom)
 
-    # Citywide yearly summary (small table; the hub CSV endpoint is sometimes
-    # rate-limited, so we query the item's feature service directly).
+    # Citywide yearly summary (15 rows). Service name confirmed via the Hub search API.
     print("\npqi_citywide_summary")
-    summary_url = f"{ORG}/1_22_PQI_Average_Citywide_(summary)/FeatureServer/0/query"
+    summary_url = f"{ORG}/1.22_PQI_Average_Citywide_(summary)_-_OD/FeatureServer/0/query"
     try:
         feats = fetch_all(summary_url, False)
         save("pqi_citywide_summary", feats, False)
-    except Exception as exc:    # the service name is a guess; fall back to the hub CSV
+    except Exception as exc:    # fall back to the hub CSV download
         print(f"  REST query failed ({exc}); downloading hub CSV instead")
         csv_url = ("https://data.tempe.gov/api/download/v1/items/"
                    "9048488c2150415b8c9d1ebf1861ebf9/csv?layers=0")
-        r = requests.get(csv_url, timeout=60)
-        r.raise_for_status()
-        (RAW / "pqi_citywide_summary.csv").write_bytes(r.content)
-        print("  saved data/raw/pqi_citywide_summary.csv")
+        try:
+            r = requests.get(csv_url, timeout=60)
+            r.raise_for_status()
+            (RAW / "pqi_citywide_summary.csv").write_bytes(r.content)
+            print("  saved data/raw/pqi_citywide_summary.csv")
+        except Exception as exc2:
+            print(f"  SKIPPED: {exc2}")
+            failed.append("pqi_citywide_summary")
 
     print("\nDone. Expected row counts on 2026-10-19: current segments 5,127; "
-          "detail 5,312; planned resurfacings 4,204; traffic 163.")
+          "detail 5,312; planned resurfacings 4,204; traffic 163 (gis.tempe.gov often returns 403); summary 15.")
+    if failed:
+        print(f"Layers not downloaded: {failed}")
